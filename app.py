@@ -1,0 +1,439 @@
+"""
+AI Copilot for Accountants — Kazakhstan MVP
+FastAPI application: all routes in one file for clarity.
+"""
+
+import os
+import json
+import shutil
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+
+from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+import database as db
+from config import UPLOAD_DIR, TAX_RATES, EXPENSE_CATEGORIES, INCOME_CATEGORIES
+from modules.ingestion.kaspi_parser import parse_kaspi_excel, parse_kaspi_pdf
+from modules.classifier.transaction_classifier import classify_transaction
+from modules.risk_engine.rules import analyze_risks, explain_risk
+from modules.export.pdf_generator import generate_tax_package
+
+# ─── App Setup ────────────────────────────────────────────────────────────────
+
+app = FastAPI(title="AI Copilot for Accountants")
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
+
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs("data", exist_ok=True)
+os.makedirs("data/exports", exist_ok=True)
+db.init_db()
+
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def get_conn():
+    return db.get_connection()
+
+
+def _save_upload(file: UploadFile, subdir: str = "") -> str:
+    dest_dir = Path(UPLOAD_DIR) / subdir
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / file.filename
+    with open(dest, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    return str(dest)
+
+
+# ─── Dashboard ────────────────────────────────────────────────────────────────
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    conn = get_conn()
+    clients = conn.execute("SELECT * FROM clients ORDER BY created_at DESC").fetchall()
+    periods = conn.execute("""
+        SELECT p.*, c.name as client_name
+        FROM periods p JOIN clients c ON p.client_id = c.id
+        ORDER BY p.year DESC, p.quarter DESC
+    """).fetchall()
+    conn.close()
+    return templates.TemplateResponse("dashboard.html", {
+        "request": request,
+        "clients": [dict(c) for c in clients],
+        "periods": [dict(p) for p in periods],
+    })
+
+
+# ─── Clients ──────────────────────────────────────────────────────────────────
+
+@app.post("/clients/create")
+async def create_client(
+    name: str = Form(...),
+    bin_number: str = Form(""),
+    tax_regime: str = Form("USN"),
+):
+    conn = get_conn()
+    cur = conn.execute(
+        "INSERT INTO clients (name, bin, tax_regime) VALUES (?, ?, ?)",
+        (name.strip(), bin_number.strip(), tax_regime)
+    )
+    client_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    db.log_action("created_client", "client", client_id, {"name": name})
+    return JSONResponse({"ok": True, "client_id": client_id})
+
+
+# ─── Periods ──────────────────────────────────────────────────────────────────
+
+@app.post("/periods/create")
+async def create_period(
+    client_id: int = Form(...),
+    quarter: str = Form(...),
+    year: int = Form(...),
+):
+    conn = get_conn()
+    cur = conn.execute(
+        "INSERT INTO periods (client_id, quarter, year) VALUES (?, ?, ?)",
+        (client_id, quarter, year)
+    )
+    period_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    db.log_action("created_period", "period", period_id, {"quarter": quarter, "year": year})
+    return JSONResponse({"ok": True, "period_id": period_id})
+
+
+# ─── Period Review Page ────────────────────────────────────────────────────────
+
+@app.get("/period/{period_id}", response_class=HTMLResponse)
+async def period_view(request: Request, period_id: int):
+    period = db.get_period_with_client(period_id)
+    if not period:
+        raise HTTPException(404, "Period not found")
+
+    transactions = db.get_transactions(period_id)
+    risks = db.get_risks(period_id)
+    summary = db.calculate_tax_summary(period_id, TAX_RATES.get(period.get("tax_regime", "USN"), 0.03))
+
+    open_risks = [r for r in risks if r.get("status") == "open"]
+    pending_tx = [t for t in transactions if not t.get("approved_by")]
+
+    conn = get_conn()
+    docs_rows = conn.execute(
+        "SELECT * FROM documents WHERE period_id = ?", (period_id,)
+    ).fetchall()
+    conn.close()
+    docs = [dict(d) for d in docs_rows]
+
+    return templates.TemplateResponse("period.html", {
+        "request": request,
+        "period": period,
+        "transactions": transactions,
+        "risks": risks,
+        "open_risks": open_risks,
+        "pending_tx": pending_tx,
+        "summary": summary,
+        "docs": docs,
+        "expense_categories": EXPENSE_CATEGORIES,
+        "income_categories": INCOME_CATEGORIES,
+    })
+
+
+# ─── Upload Bank Statement ────────────────────────────────────────────────────
+
+@app.post("/period/{period_id}/upload-statement")
+async def upload_statement(period_id: int, file: UploadFile = File(...)):
+    period = db.get_period_with_client(period_id)
+    if not period:
+        raise HTTPException(404, "Period not found")
+
+    file_path = _save_upload(file, f"period_{period_id}")
+    ext = Path(file.filename).suffix.lower()
+
+    try:
+        if ext in [".xlsx", ".xls"]:
+            transactions = parse_kaspi_excel(file_path)
+        elif ext == ".pdf":
+            transactions = parse_kaspi_pdf(file_path)
+        else:
+            return JSONResponse({"ok": False, "error": "Поддерживаются только .xlsx и .pdf файлы"})
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Ошибка парсинга: {str(e)}"})
+
+    if not transactions:
+        return JSONResponse({"ok": False, "error": "Не найдено операций в файле"})
+
+    conn = get_conn()
+    inserted = 0
+    for tx in transactions:
+        conn.execute("""
+            INSERT INTO transactions
+            (period_id, date, amount, direction, counterparty, description, raw_data)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (
+            period_id,
+            tx.get("date"),
+            tx.get("amount"),
+            tx.get("direction"),
+            tx.get("counterparty", ""),
+            tx.get("description", ""),
+            tx.get("raw_data", ""),
+        ))
+        inserted += 1
+    conn.commit()
+    conn.close()
+
+    db.log_action("uploaded_statement", "period", period_id, {
+        "file": file.filename, "transactions_imported": inserted
+    })
+
+    return JSONResponse({"ok": True, "imported": inserted})
+
+
+# ─── Upload Supporting Document ───────────────────────────────────────────────
+
+@app.post("/period/{period_id}/upload-document")
+async def upload_document(
+    period_id: int,
+    file: UploadFile = File(...),
+    transaction_id: int = Form(None),
+):
+    file_path = _save_upload(file, f"docs_{period_id}")
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO documents (transaction_id, period_id, file_name, file_path) VALUES (?, ?, ?, ?)",
+        (transaction_id, period_id, file.filename, file_path)
+    )
+    conn.commit()
+    conn.close()
+    db.log_action("uploaded_document", "period", period_id, {"file": file.filename})
+    return JSONResponse({"ok": True})
+
+
+# ─── Classify All (LLM) ───────────────────────────────────────────────────────
+
+@app.post("/period/{period_id}/classify-all")
+async def classify_all(period_id: int):
+    transactions = db.get_transactions(period_id)
+    unclassified = [t for t in transactions if not t.get("llm_suggestion")]
+
+    if not unclassified:
+        return JSONResponse({"ok": True, "classified": 0, "message": "Все уже классифицированы"})
+
+    conn = get_conn()
+    classified_count = 0
+
+    for tx in unclassified:
+        try:
+            result = classify_transaction(tx)
+            conn.execute("""
+                UPDATE transactions
+                SET llm_suggestion = ?, llm_confidence = ?, llm_reasoning = ?, needs_review = ?
+                WHERE id = ?
+            """, (
+                result.get("category"),
+                result.get("confidence"),
+                result.get("reasoning"),
+                1 if result.get("needs_review") else 0,
+                tx["id"],
+            ))
+            classified_count += 1
+        except Exception as e:
+            conn.execute("""
+                UPDATE transactions SET llm_reasoning = ? WHERE id = ?
+            """, (f"Ошибка классификации: {str(e)}", tx["id"]))
+
+    conn.commit()
+    conn.close()
+
+    db.log_action("classify_all", "period", period_id, {"classified": classified_count})
+    return JSONResponse({"ok": True, "classified": classified_count})
+
+
+# ─── Approve / Edit Transaction ───────────────────────────────────────────────
+
+@app.post("/transaction/{tx_id}/approve")
+async def approve_transaction(
+    tx_id: int,
+    category: str = Form(...),
+    subcategory: str = Form(""),
+):
+    conn = get_conn()
+    tx = conn.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,)).fetchone()
+    if not tx:
+        conn.close()
+        raise HTTPException(404, "Transaction not found")
+
+    old_category = tx["category"]
+    conn.execute("""
+        UPDATE transactions
+        SET category = ?, subcategory = ?, approved_by = 'accountant', approved_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, (category, subcategory, tx_id))
+    conn.commit()
+    conn.close()
+
+    db.log_action("approved_transaction", "transaction", tx_id, {
+        "old_category": old_category,
+        "new_category": category,
+        "llm_suggestion": tx["llm_suggestion"],
+        "llm_confidence": tx["llm_confidence"],
+    })
+    return JSONResponse({"ok": True})
+
+
+# ─── Run Risk Analysis ────────────────────────────────────────────────────────
+
+@app.post("/period/{period_id}/analyze-risks")
+async def run_risk_analysis(period_id: int):
+    transactions = db.get_transactions(period_id)
+
+    conn = get_conn()
+    docs_rows = conn.execute(
+        "SELECT * FROM documents WHERE period_id = ?", (period_id,)
+    ).fetchall()
+    conn.close()
+
+    docs_by_tx = {}
+    for d in docs_rows:
+        tid = d["transaction_id"]
+        if tid:
+            docs_by_tx.setdefault(tid, []).append(dict(d))
+
+    risks = analyze_risks(transactions, docs_by_tx)
+
+    conn = get_conn()
+    conn.execute("DELETE FROM risks WHERE period_id = ?", (period_id,))
+    for r in risks:
+        conn.execute("""
+            INSERT INTO risks (period_id, transaction_id, risk_type, severity, description)
+            VALUES (?, ?, ?, ?, ?)
+        """, (period_id, r["transaction_id"], r["risk_type"], r["severity"], r["description"]))
+    conn.commit()
+    conn.close()
+
+    db.log_action("analyzed_risks", "period", period_id, {"risks_found": len(risks)})
+    return JSONResponse({"ok": True, "risks_found": len(risks)})
+
+
+# ─── Explain Risk (LLM) ───────────────────────────────────────────────────────
+
+@app.get("/risk/{risk_id}/explain")
+async def get_risk_explanation(risk_id: int):
+    conn = get_conn()
+    risk_row = conn.execute("SELECT * FROM risks WHERE id = ?", (risk_id,)).fetchone()
+    if not risk_row:
+        conn.close()
+        raise HTTPException(404)
+
+    risk = dict(risk_row)
+    tx = {}
+    if risk.get("transaction_id"):
+        tx_row = conn.execute(
+            "SELECT * FROM transactions WHERE id = ?", (risk["transaction_id"],)
+        ).fetchone()
+        if tx_row:
+            tx = dict(tx_row)
+
+    # Check if explanation already cached
+    if risk.get("llm_explanation"):
+        conn.close()
+        return JSONResponse({"explanation": risk["llm_explanation"]})
+
+    explanation = explain_risk(risk, tx)
+    conn.execute(
+        "UPDATE risks SET llm_explanation = ? WHERE id = ?",
+        (explanation, risk_id)
+    )
+    conn.commit()
+    conn.close()
+
+    return JSONResponse({"explanation": explanation})
+
+
+# ─── Resolve Risk ─────────────────────────────────────────────────────────────
+
+@app.post("/risk/{risk_id}/resolve")
+async def resolve_risk(risk_id: int, action: str = Form(...)):
+    valid = {"resolved", "ignored"}
+    if action not in valid:
+        raise HTTPException(400, "Invalid action")
+
+    conn = get_conn()
+    conn.execute("""
+        UPDATE risks SET status = ?, resolved_by = 'accountant', resolved_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, (action, risk_id))
+    conn.commit()
+    conn.close()
+
+    db.log_action(f"risk_{action}", "risk", risk_id)
+    return JSONResponse({"ok": True})
+
+
+# ─── Generate PDF ─────────────────────────────────────────────────────────────
+
+@app.get("/period/{period_id}/export-pdf")
+async def export_pdf(period_id: int):
+    period = db.get_period_with_client(period_id)
+    if not period:
+        raise HTTPException(404)
+
+    transactions = db.get_transactions(period_id)
+    risks = db.get_risks(period_id)
+    summary = db.calculate_tax_summary(period_id, TAX_RATES.get(period.get("tax_regime", "USN"), 0.03))
+
+    client = {
+        "name": period.get("client_name", ""),
+        "bin": period.get("bin", ""),
+    }
+
+    filename = f"tax_package_{period_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    output_path = f"data/exports/{filename}"
+
+    try:
+        generate_tax_package(output_path, client, period, transactions, risks, summary)
+    except Exception as e:
+        raise HTTPException(500, f"Ошибка генерации PDF: {str(e)}")
+
+    db.log_action("exported_pdf", "period", period_id, {"file": filename})
+
+    return FileResponse(
+        output_path,
+        media_type="application/pdf",
+        filename=filename,
+    )
+
+
+# ─── Audit Log ────────────────────────────────────────────────────────────────
+
+@app.get("/period/{period_id}/audit", response_class=HTMLResponse)
+async def audit_log(request: Request, period_id: int):
+    period = db.get_period_with_client(period_id)
+    conn = get_conn()
+    logs = conn.execute(
+        "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 200"
+    ).fetchall()
+    conn.close()
+    return templates.TemplateResponse("audit.html", {
+        "request": request,
+        "period": period,
+        "logs": [dict(l) for l in logs],
+    })
+
+
+# ─── API: Transaction detail ──────────────────────────────────────────────────
+
+@app.get("/api/transaction/{tx_id}")
+async def get_transaction(tx_id: int):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(404)
+    return JSONResponse(dict(row))

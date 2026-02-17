@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Главная — AI Copilot{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Рабочий стол</h1>
+</div>
+
+<div class="two-col">
+
+  <!-- Left: Periods -->
+  <section class="card">
+    <div class="card-head">
+      <h2>Отчётные периоды</h2>
+      <button class="btn btn-primary" onclick="openModal('new-period-modal')">+ Новый период</button>
+    </div>
+
+    {% if periods %}
+    <table class="table">
+      <thead>
+        <tr><th>Клиент</th><th>Период</th><th>Статус</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for p in periods %}
+        <tr>
+          <td>{{ p.client_name }}</td>
+          <td>{{ p.quarter }} {{ p.year }}</td>
+          <td><span class="badge badge-{{ p.status }}">{{ p.status }}</span></td>
+          <td><a href="/period/{{ p.id }}" class="btn btn-sm">Открыть</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">Нет периодов. Создайте первый период.</p>
+    {% endif %}
+  </section>
+
+  <!-- Right: Clients + New -->
+  <section class="card">
+    <div class="card-head">
+      <h2>Клиенты (ИП)</h2>
+      <button class="btn btn-secondary" onclick="openModal('new-client-modal')">+ Клиент</button>
+    </div>
+
+    {% if clients %}
+    <table class="table">
+      <thead>
+        <tr><th>Наименование</th><th>БИН/ИИН</th><th>Режим</th></tr>
+      </thead>
+      <tbody>
+        {% for c in clients %}
+        <tr>
+          <td>{{ c.name }}</td>
+          <td>{{ c.bin or '—' }}</td>
+          <td>{{ c.tax_regime }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty">Нет клиентов. Добавьте ИП.</p>
+    {% endif %}
+  </section>
+
+</div>
+
+<!-- New Client Modal -->
+<div id="new-client-modal" class="modal-content-tpl" style="display:none">
+  <h3>Новый клиент</h3>
+  <form onsubmit="submitClient(event)">
+    <div class="field">
+      <label>Наименование ИП *</label>
+      <input type="text" name="name" required placeholder="ИП Иванов">
+    </div>
+    <div class="field">
+      <label>БИН / ИИН</label>
+      <input type="text" name="bin_number" placeholder="123456789012">
+    </div>
+    <div class="field">
+      <label>Налоговый режим</label>
+      <select name="tax_regime">
+        <option value="USN">УСН (3%)</option>
+      </select>
+    </div>
+    <button type="submit" class="btn btn-primary">Создать</button>
+  </form>
+</div>
+
+<!-- New Period Modal -->
+<div id="new-period-modal" class="modal-content-tpl" style="display:none">
+  <h3>Новый период</h3>
+  <form onsubmit="submitPeriod(event)">
+    <div class="field">
+      <label>Клиент *</label>
+      <select name="client_id" required>
+        {% for c in clients %}
+        <option value="{{ c.id }}">{{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label>Квартал *</label>
+      <select name="quarter">
+        <option value="Q1">Q1 (январь–март)</option>
+        <option value="Q2">Q2 (апрель–июнь)</option>
+        <option value="Q3">Q3 (июль–сентябрь)</option>
+        <option value="Q4">Q4 (октябрь–декабрь)</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Год *</label>
+      <input type="number" name="year" value="2025" min="2020" max="2030" required>
+    </div>
+    <button type="submit" class="btn btn-primary">Создать период</button>
+  </form>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function submitClient(e) {
+  e.preventDefault();
+  const data = new FormData(e.target);
+  const res = await fetch('/clients/create', { method: 'POST', body: data });
+  const json = await res.json();
+  if (json.ok) { showToast('Клиент создан'); setTimeout(() => location.reload(), 800); }
+  else showToast('Ошибка: ' + (json.error || ''), 'error');
+}
+
+async function submitPeriod(e) {
+  e.preventDefault();
+  const data = new FormData(e.target);
+  const res = await fetch('/periods/create', { method: 'POST', body: data });
+  const json = await res.json();
+  if (json.ok) {
+    showToast('Период создан');
+    setTimeout(() => window.location.href = '/period/' + json.period_id, 800);
+  } else showToast('Ошибка: ' + (json.error || ''), 'error');
+}
+</script>
+{% endblock %}

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}AI Copilot — Бухгалтер{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/main.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a href="/" class="brand">🧾 AI Copilot</a>
+      <span class="tagline">Налоговый помощник для ИП (Казахстан)</span>
+    </div>
+  </header>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal" id="modal-box">
+      <button class="modal-close" onclick="closeModal()">✕</button>
+      <div id="modal-content"></div>
+    </div>
+  </div>
+
+  <script src="/static/js/main.js"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
