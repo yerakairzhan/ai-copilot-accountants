@@ -11,11 +11,14 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import database as db
+
+import hmac
+import hashlib
 from config import UPLOAD_DIR, TAX_RATES, EXPENSE_CATEGORIES, INCOME_CATEGORIES
 from modules.ingestion.kaspi_parser import parse_kaspi_excel, parse_kaspi_pdf
 from modules.classifier.transaction_classifier import classify_transaction
@@ -40,6 +43,12 @@ def get_conn():
     return db.get_connection()
 
 
+AUTH_EMAIL = "admin@mail.ru"
+AUTH_PASSWORD = "admin"
+AUTH_COOKIE_NAME = "auth_token"
+AUTH_SECRET = "change_this_secret_for_production"
+
+
 def _save_upload(file: UploadFile, subdir: str = "") -> str:
     dest_dir = Path(UPLOAD_DIR) / subdir
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -49,10 +58,67 @@ def _save_upload(file: UploadFile, subdir: str = "") -> str:
     return str(dest)
 
 
+def _make_auth_token(email: str) -> str:
+    signature = hmac.new(AUTH_SECRET.encode(), email.encode(), hashlib.sha256).hexdigest()
+    return f"{email}:{signature}"
+
+
+def _verify_auth_token(token: str) -> bool:
+    try:
+        email, signature = token.split(":", 1)
+    except ValueError:
+        return False
+
+    expected = hmac.new(AUTH_SECRET.encode(), email.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature, expected) and email == AUTH_EMAIL
+
+
+def _is_authenticated(request: Request) -> bool:
+    token = request.cookies.get(AUTH_COOKIE_NAME)
+    if not token:
+        return False
+    return _verify_auth_token(token)
+
+
+def render_template(request: Request, template_name: str, **context):
+    context.setdefault("logged_in", _is_authenticated(request))
+    context["request"] = request
+    return templates.TemplateResponse(template_name, context)
+
+
+# ─── Authentication ──────────────────────────────────────────────────────────
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    if _is_authenticated(request):
+        return RedirectResponse("/", status_code=303)
+    return render_template(request, "login.html")
+
+
+@app.post("/login")
+async def login_submit(request: Request, email: str = Form(...), password: str = Form(...)):
+    if email == AUTH_EMAIL and password == AUTH_PASSWORD:
+        response = RedirectResponse("/", status_code=303)
+        response.set_cookie(AUTH_COOKIE_NAME, _make_auth_token(email), httponly=True, max_age=3600)
+        return response
+
+    return render_template(request, "login.html", error="Неверный логин или пароль")
+
+
+@app.get("/logout")
+async def logout(request: Request):
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(AUTH_COOKIE_NAME)
+    return response
+
+
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
+    if not _is_authenticated(request):
+        return RedirectResponse("/login", status_code=303)
+
     conn = get_conn()
     clients = conn.execute("SELECT * FROM clients ORDER BY created_at DESC").fetchall()
     periods = conn.execute("""
@@ -61,11 +127,12 @@ async def dashboard(request: Request):
         ORDER BY p.year DESC, p.quarter DESC
     """).fetchall()
     conn.close()
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
-        "clients": [dict(c) for c in clients],
-        "periods": [dict(p) for p in periods],
-    })
+    return render_template(
+        request,
+        "dashboard.html",
+        clients=[dict(c) for c in clients],
+        periods=[dict(p) for p in periods],
+    )
 
 
 # ─── Clients ──────────────────────────────────────────────────────────────────
@@ -112,6 +179,9 @@ async def create_period(
 
 @app.get("/period/{period_id}", response_class=HTMLResponse)
 async def period_view(request: Request, period_id: int):
+    if not _is_authenticated(request):
+        return RedirectResponse("/login", status_code=303)
+
     period = db.get_period_with_client(period_id)
     if not period:
         raise HTTPException(404, "Period not found")
@@ -130,18 +200,19 @@ async def period_view(request: Request, period_id: int):
     conn.close()
     docs = [dict(d) for d in docs_rows]
 
-    return templates.TemplateResponse("period.html", {
-        "request": request,
-        "period": period,
-        "transactions": transactions,
-        "risks": risks,
-        "open_risks": open_risks,
-        "pending_tx": pending_tx,
-        "summary": summary,
-        "docs": docs,
-        "expense_categories": EXPENSE_CATEGORIES,
-        "income_categories": INCOME_CATEGORIES,
-    })
+    return render_template(
+        request,
+        "period.html",
+        period=period,
+        transactions=transactions,
+        risks=risks,
+        open_risks=open_risks,
+        pending_tx=pending_tx,
+        summary=summary,
+        docs=docs,
+        expense_categories=EXPENSE_CATEGORIES,
+        income_categories=INCOME_CATEGORIES,
+    )
 
 
 # ─── Upload Bank Statement ────────────────────────────────────────────────────
@@ -414,17 +485,21 @@ async def export_pdf(period_id: int):
 
 @app.get("/period/{period_id}/audit", response_class=HTMLResponse)
 async def audit_log(request: Request, period_id: int):
+    if not _is_authenticated(request):
+        return RedirectResponse("/login", status_code=303)
+
     period = db.get_period_with_client(period_id)
     conn = get_conn()
     logs = conn.execute(
         "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT 200"
     ).fetchall()
     conn.close()
-    return templates.TemplateResponse("audit.html", {
-        "request": request,
-        "period": period,
-        "logs": [dict(l) for l in logs],
-    })
+    return render_template(
+        request,
+        "audit.html",
+        period=period,
+        logs=[dict(l) for l in logs],
+    )
 
 
 # ─── API: Transaction detail ──────────────────────────────────────────────────

@@ -11,6 +11,13 @@
     <div class="topbar-inner">
       <a href="/" class="brand">🧾 AI Copilot</a>
       <span class="tagline">Налоговый помощник для ИП (Казахстан)</span>
+      <div class="topbar-actions">
+        {% if logged_in %}
+          <a href="/logout" class="btn btn-secondary btn-sm">Выйти</a>
+        {% else %}
+          <a href="/login" class="btn btn-secondary btn-sm">Войти</a>
+        {% endif %}
+      </div>
     </div>
   </header>
 

@@ -25,4 +25,4 @@ mkdir -p data/uploads data/exports
 echo ""
 echo "✅ Ready! Opening at http://localhost:8000"
 echo ""
-python -m uvicorn app:app --reload --host 0.0.0.0 --port 8000
+python3 -m uvicorn app:app --reload --host 0.0.0.0 --port 8000

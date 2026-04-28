@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Вход — AI Copilot{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Вход в систему</h1>
+</div>
+
+<section class="card" style="max-width: 440px; margin: 0 auto;">
+  {% if error %}
+  <div class="alert alert-error">{{ error }}</div>
+  {% endif %}
+
+  <form method="post" action="/login">
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" value="admin@mail.ru" required>
+    </div>
+    <div class="field">
+      <label for="password">Пароль</label>
+      <input id="password" name="password" type="password" value="admin" required>
+    </div>
+    <button type="submit" class="btn btn-primary">Войти</button>
+  </form>
+
+  <div style="margin-top: 16px; color: #6b7280; font-size: 13px;">
+    Используйте admin@mail.ru / admin для доступа.
+  </div>
+</section>
+{% endblock %}
