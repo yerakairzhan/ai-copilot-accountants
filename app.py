@@ -19,7 +19,7 @@ import database as db
 
 import hmac
 import hashlib
-from config import UPLOAD_DIR, TAX_RATES, EXPENSE_CATEGORIES, INCOME_CATEGORIES
+from config import UPLOAD_DIR, TAX_RATES, EXPENSE_CATEGORIES, INCOME_CATEGORIES, CATEGORY_SUBCATEGORIES
 from modules.ingestion.kaspi_parser import parse_kaspi_excel, parse_kaspi_pdf
 from modules.classifier.transaction_classifier import classify_transaction
 from modules.risk_engine.rules import analyze_risks, explain_risk
@@ -227,43 +227,57 @@ async def upload_statement(period_id: int, file: UploadFile = File(...)):
     ext = Path(file.filename).suffix.lower()
 
     try:
-        if ext in [".xlsx", ".xls"]:
-            transactions = parse_kaspi_excel(file_path)
+        if ext == ".xlsx":
+            parsed = parse_kaspi_excel(file_path)
         elif ext == ".pdf":
-            transactions = parse_kaspi_pdf(file_path)
+            parsed = parse_kaspi_pdf(file_path)
         else:
             return JSONResponse({"ok": False, "error": "Поддерживаются только .xlsx и .pdf файлы"})
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"Ошибка парсинга: {str(e)}"})
 
-    if not transactions:
-        return JSONResponse({"ok": False, "error": "Не найдено операций в файле"})
+    transactions = parsed["transactions"]
+    errors, warnings = parsed["errors"], parsed["warnings"]
 
+    # Skip rows already imported for this period (re-uploading the same file)
     conn = get_conn()
+    existing = {
+        (r["date"], r["amount"], r["direction"], r["counterparty"] or "", r["description"] or "")
+        for r in conn.execute("SELECT * FROM transactions WHERE period_id = ?", (period_id,))
+    }
     inserted = 0
     for tx in transactions:
+        key = (tx["date"], tx["amount"], tx["direction"], tx["counterparty"], tx["description"])
+        if key in existing:
+            warnings.append({"row": 0, "error": f"Уже импортировано ранее: {tx['date']} {tx['amount']:,.2f}"})
+            continue
         conn.execute("""
             INSERT INTO transactions
             (period_id, date, amount, direction, counterparty, description, raw_data)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
-            period_id,
-            tx.get("date"),
-            tx.get("amount"),
-            tx.get("direction"),
-            tx.get("counterparty", ""),
-            tx.get("description", ""),
-            tx.get("raw_data", ""),
+            period_id, tx["date"], tx["amount"], tx["direction"],
+            tx["counterparty"], tx["description"], tx["raw_data"],
         ))
         inserted += 1
     conn.commit()
     conn.close()
 
+    if inserted:
+        db.refresh_period_status(period_id)
+
+    if not inserted and not transactions:
+        msg = errors[0]["error"] if errors else "Не найдено операций в файле"
+        return JSONResponse({"ok": False, "error": msg, "errors": errors, "summary": parsed["summary"]})
+
     db.log_action("uploaded_statement", "period", period_id, {
         "file": file.filename, "transactions_imported": inserted
     })
 
-    return JSONResponse({"ok": True, "imported": inserted})
+    return JSONResponse({
+        "ok": True, "imported": inserted,
+        "summary": parsed["summary"], "errors": errors, "warnings": warnings,
+    })
 
 
 # ─── Upload Supporting Document ───────────────────────────────────────────────
@@ -304,10 +318,11 @@ async def classify_all(period_id: int):
             result = classify_transaction(tx)
             conn.execute("""
                 UPDATE transactions
-                SET llm_suggestion = ?, llm_confidence = ?, llm_reasoning = ?, needs_review = ?
+                SET llm_suggestion = ?, llm_subcategory = ?, llm_confidence = ?, llm_reasoning = ?, needs_review = ?
                 WHERE id = ?
             """, (
                 result.get("category"),
+                result.get("subcategory"),
                 result.get("confidence"),
                 result.get("reasoning"),
                 1 if result.get("needs_review") else 0,
@@ -334,28 +349,85 @@ async def approve_transaction(
     category: str = Form(...),
     subcategory: str = Form(""),
 ):
+    if category not in CATEGORY_SUBCATEGORIES:
+        raise HTTPException(400, "Invalid category")
+    if subcategory and subcategory not in CATEGORY_SUBCATEGORIES[category]:
+        raise HTTPException(400, "Invalid subcategory for this category")
+
     conn = get_conn()
     tx = conn.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,)).fetchone()
     if not tx:
         conn.close()
         raise HTTPException(404, "Transaction not found")
 
-    old_category = tx["category"]
+    # "accepted" = accountant kept the AI suggestion as is, "edited" = changed it
+    accepted = tx["llm_suggestion"] == category and (tx["llm_subcategory"] or "") == subcategory
+    review_status = "accepted" if accepted else "edited"
+
     conn.execute("""
         UPDATE transactions
-        SET category = ?, subcategory = ?, approved_by = 'accountant', approved_at = CURRENT_TIMESTAMP
+        SET category = ?, subcategory = ?, review_status = ?,
+            approved_by = 'accountant', approved_at = CURRENT_TIMESTAMP
         WHERE id = ?
-    """, (category, subcategory, tx_id))
+    """, (category, subcategory, review_status, tx_id))
     conn.commit()
     conn.close()
 
+    period_status = db.refresh_period_status(tx["period_id"])
     db.log_action("approved_transaction", "transaction", tx_id, {
-        "old_category": old_category,
+        "old_category": tx["category"],
         "new_category": category,
+        "subcategory": subcategory,
+        "review_status": review_status,
         "llm_suggestion": tx["llm_suggestion"],
         "llm_confidence": tx["llm_confidence"],
     })
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "review_status": review_status, "period_status": period_status})
+
+
+# ─── Accept / Edit screen ─────────────────────────────────────────────────────
+
+@app.get("/period/{period_id}/review", response_class=HTMLResponse)
+async def review_page(request: Request, period_id: int):
+    if not _is_authenticated(request):
+        return RedirectResponse("/login", status_code=303)
+
+    period = db.get_period_with_client(period_id)
+    if not period:
+        raise HTTPException(404, "Period not found")
+
+    transactions = db.get_transactions(period_id)
+    return render_template(
+        request,
+        "review.html",
+        period=period,
+        transactions=transactions,
+        pending=[t for t in transactions if not t.get("approved_by")],
+        category_map=CATEGORY_SUBCATEGORIES,
+    )
+
+
+@app.post("/period/{period_id}/accept-confident")
+async def accept_confident(period_id: int):
+    """Bulk-accept AI suggestions that don't need review."""
+    conn = get_conn()
+    rows = conn.execute("""
+        SELECT id, llm_suggestion, llm_subcategory FROM transactions
+        WHERE period_id = ? AND approved_by IS NULL
+          AND llm_suggestion IS NOT NULL AND needs_review = 0
+    """, (period_id,)).fetchall()
+    for r in rows:
+        conn.execute("""
+            UPDATE transactions
+            SET category = ?, subcategory = ?, review_status = 'accepted',
+                approved_by = 'accountant', approved_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (r["llm_suggestion"], r["llm_subcategory"] or "", r["id"]))
+    conn.commit()
+    conn.close()
+    db.refresh_period_status(period_id)
+    db.log_action("accept_confident", "period", period_id, {"accepted": len(rows)})
+    return JSONResponse({"ok": True, "accepted": len(rows)})
 
 
 # ─── Run Risk Analysis ────────────────────────────────────────────────────────

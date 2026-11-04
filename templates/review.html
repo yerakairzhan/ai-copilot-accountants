@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Проверка — {{ period.client_name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Проверка операций</h1>
+    <p class="subtitle">{{ period.client_name }} · {{ period.quarter }} {{ period.year }} ·
+      статус: <span class="badge badge-{{ 'success' if period.status == 'reviewed' else 'draft' }}">{{ 'Проверен' if period.status == 'reviewed' else 'Черновик' }}</span>
+      · <a href="/period/{{ period.id }}">← К периоду</a></p>
+  </div>
+  <div class="header-actions">
+    <button class="btn btn-ai" onclick="acceptConfident()">⚡ Принять все уверенные</button>
+  </div>
+</div>
+
+{% if transactions|length == 0 %}
+<p class="empty">Нет операций. Загрузите выписку на странице периода.</p>
+{% else %}
+<div class="alert {{ 'alert-success' if pending|length == 0 else 'alert-warning' }}">
+  {% if pending|length == 0 %}✅ Все операции подтверждены{% else %}⚠️ Ожидают подтверждения: {{ pending|length }} из {{ transactions|length }}{% endif %}
+</div>
+
+<section class="card">
+  <div class="tx-table-wrap">
+    <table class="table tx-table">
+      <thead>
+        <tr>
+          <th>Дата</th><th>Операция</th><th class="text-right">Сумма ₸</th>
+          <th>AI</th><th>Категория</th><th>Уточнение</th><th>Статус</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for tx in transactions %}
+        {% set cat = tx.category or tx.llm_suggestion or ('income' if tx.direction == 'in' else 'expense') %}
+        {% set sub = tx.subcategory if tx.approved_by else (tx.llm_subcategory or '') %}
+        <tr id="row-{{ tx.id }}" data-ai-cat="{{ tx.llm_suggestion or '' }}" data-ai-sub="{{ tx.llm_subcategory or '' }}">
+          <td>{{ tx.date or '—' }}</td>
+          <td>
+            <div class="tx-counterparty">{{ tx.counterparty or '—' }}</div>
+            <div class="tx-note">{{ (tx.description or '')[:80] }}</div>
+          </td>
+          <td class="text-right tx-amount {{ 'amount-in' if tx.direction == 'in' else 'amount-out' }}">
+            {{ '+' if tx.direction == 'in' else '−' }}{{ "{:,.0f}".format(tx.amount).replace(",", " ") }}
+          </td>
+          <td>
+            {% if tx.llm_suggestion %}
+              <span class="badge badge-ai" title="{{ tx.llm_reasoning }}">{{ tx.llm_suggestion }}{% if tx.llm_subcategory %} · {{ tx.llm_subcategory }}{% endif %}</span>
+              <div class="tx-note">{{ (tx.llm_confidence * 100)|int }}%{% if tx.needs_review %} · ❓ проверить{% endif %}</div>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            <select class="cat-select" onchange="fillSubs({{ tx.id }})">
+              {% for c in category_map %}<option value="{{ c }}" {{ 'selected' if c == cat }}>{{ {'income': 'Доход', 'expense': 'Расход', 'personal': 'Личное'}[c] }}</option>{% endfor %}
+            </select>
+          </td>
+          <td>
+            <select class="sub-select" data-initial="{{ sub }}"></select>
+          </td>
+          <td class="status-cell">
+            {% if tx.review_status == 'accepted' %}<span class="badge badge-success">Принято</span>
+            {% elif tx.review_status == 'edited' %}<span class="badge badge-expense">Изменено</span>
+            {% else %}<span class="text-muted">Ожидает</span>{% endif %}
+          </td>
+          <td>
+            <button class="btn btn-sm btn-success" onclick="saveTx({{ tx.id }})">{{ '✎ Сохранить' if tx.approved_by else '✓ Принять' }}</button>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const periodId = {{ period.id }};
+const categoryMap = {{ category_map | tojson }};
+
+function fillSubs(id) {
+  const row = document.getElementById('row-' + id);
+  const cat = row.querySelector('.cat-select').value;
+  const sel = row.querySelector('.sub-select');
+  const wanted = sel.dataset.initial || '';
+  const subs = categoryMap[cat] || [];
+  sel.innerHTML = '<option value="">—</option>' + subs.map(s =>
+    `<option value="${escapeHtml(s)}" ${s === wanted ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
+  sel.disabled = subs.length === 0;
+  sel.dataset.initial = '';
+}
+
+async function saveTx(id) {
+  const row = document.getElementById('row-' + id);
+  const fd = new FormData();
+  fd.append('category', row.querySelector('.cat-select').value);
+  fd.append('subcategory', row.querySelector('.sub-select').value);
+  const res = await fetch(`/transaction/${id}/approve`, { method: 'POST', body: fd });
+  const json = await res.json();
+  if (json.ok) {
+    row.querySelector('.status-cell').innerHTML = json.review_status === 'accepted'
+      ? '<span class="badge badge-success">Принято</span>' : '<span class="badge badge-expense">Изменено</span>';
+    showToast('Сохранено');
+    if (json.period_status === 'reviewed') setTimeout(() => location.reload(), 600);
+  } else {
+    showToast(json.detail || 'Ошибка', 'error');
+  }
+}
+
+async function acceptConfident() {
+  const res = await fetch(`/period/${periodId}/accept-confident`, { method: 'POST' });
+  const json = await res.json();
+  showToast(`Принято: ${json.accepted}`);
+  setTimeout(() => location.reload(), 600);
+}
+
+document.querySelectorAll('tr[id^="row-"]').forEach(r => fillSubs(r.id.slice(4)));
+</script>
+{% endblock %}

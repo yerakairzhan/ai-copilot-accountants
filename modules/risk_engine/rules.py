@@ -124,6 +124,10 @@ def explain_risk(risk: dict, transaction: dict) -> str:
     Ask LLM to explain a risk in plain language.
     Used on-demand when accountant clicks 'Объяснить'.
     """
+    from config import LLM_PROVIDER
+    if LLM_PROVIDER == "fake":
+        from modules.llm.fake import fake_explain
+        return fake_explain(risk)
     try:
         prompt = f"""Ты — налоговый консультант в Казахстане. Объясни бухгалтеру налоговый риск.
 

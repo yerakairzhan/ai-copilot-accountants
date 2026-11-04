@@ -47,9 +47,11 @@ def init_db():
         category TEXT,
         subcategory TEXT,
         llm_suggestion TEXT,
+        llm_subcategory TEXT,
         llm_confidence REAL,
         llm_reasoning TEXT,
         needs_review INTEGER DEFAULT 1,
+        review_status TEXT DEFAULT 'pending',
         approved_by TEXT,
         approved_at TIMESTAMP,
         FOREIGN KEY(period_id) REFERENCES periods(id)
@@ -92,6 +94,13 @@ def init_db():
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """)
+
+    # Lightweight migration for databases created before these columns existed
+    existing = {r["name"] for r in cur.execute("PRAGMA table_info(transactions)")}
+    for col, ddl in (("llm_subcategory", "TEXT"), ("review_status", "TEXT DEFAULT 'pending'")):
+        if col not in existing:
+            cur.execute(f"ALTER TABLE transactions ADD COLUMN {col} {ddl}")
+    cur.execute("UPDATE transactions SET review_status = 'accepted' WHERE approved_by IS NOT NULL AND review_status = 'pending'")
 
     conn.commit()
     conn.close()
@@ -172,3 +181,17 @@ def calculate_tax_summary(period_id: int, tax_rate: float = 0.03):
         "tax": round(tax, 2),
         "tax_rate": tax_rate,
     }
+
+
+def refresh_period_status(period_id: int) -> str:
+    """Period is 'reviewed' when it has transactions and all are approved, else 'draft'."""
+    conn = get_connection()
+    total, pending = conn.execute(
+        "SELECT COUNT(*), SUM(CASE WHEN approved_by IS NULL THEN 1 ELSE 0 END) FROM transactions WHERE period_id = ?",
+        (period_id,),
+    ).fetchone()
+    status = "reviewed" if total and not pending else "draft"
+    conn.execute("UPDATE periods SET status = ? WHERE id = ?", (status, period_id))
+    conn.commit()
+    conn.close()
+    return status

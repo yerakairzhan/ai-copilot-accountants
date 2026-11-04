@@ -72,6 +72,7 @@
           <button class="btn btn-primary" onclick="uploadStatement()">Загрузить выписку</button>
           <span id="statement-status" class="status-text"></span>
         </div>
+        <div id="import-report"></div>
         <div class="upload-block">
           <label class="upload-label">
             📎 Первичный документ (счёт, акт, договор)
@@ -89,6 +90,7 @@
         <h2>2. Операции ({{ transactions|length }})</h2>
         <div class="action-row">
           {% if transactions|length > 0 %}
+          <a href="/period/{{ period.id }}/review" class="btn btn-secondary">✎ Проверить операции</a>
           <button class="btn btn-ai" onclick="classifyAll()" id="classify-btn">
             🤖 Классифицировать все
           </button>
@@ -162,13 +164,9 @@
               </td>
               <td class="tx-actions">
                 {% if not tx.approved_by %}
-                <button class="btn btn-sm btn-success" onclick="openApproveModal({{ tx.id }}, '{{ tx.llm_suggestion }}')">
-                  ✓ Принять
-                </button>
+                <a class="btn btn-sm btn-success" href="/period/{{ period.id }}/review#row-{{ tx.id }}">✓ Принять</a>
                 {% else %}
-                <button class="btn btn-sm btn-ghost" onclick="openApproveModal({{ tx.id }}, '{{ tx.category }}')">
-                  ✎ Изменить
-                </button>
+                <a class="btn btn-sm btn-ghost" href="/period/{{ period.id }}/review#row-{{ tx.id }}">✎ Изменить</a>
                 {% endif %}
               </td>
             </tr>
@@ -238,36 +236,6 @@
 
 </div>
 
-<!-- Approve Modal Content -->
-<div id="approve-modal" class="modal-content-tpl" style="display:none">
-  <h3>Подтвердить операцию</h3>
-  <div id="tx-detail-info" class="tx-modal-info"></div>
-  <form onsubmit="submitApproval(event)">
-    <input type="hidden" name="tx_id" id="approve-tx-id">
-    <div class="field">
-      <label>Категория *</label>
-      <select name="category" id="approve-category" required>
-        <option value="income">Доход</option>
-        <option value="expense">Расход</option>
-        <option value="personal">Личная операция</option>
-      </select>
-    </div>
-    <div class="field" id="subcategory-field">
-      <label>Уточнение</label>
-      <select name="subcategory" id="approve-subcategory">
-        <option value="">— выберите —</option>
-        {% for cat in expense_categories %}
-        <option value="{{ cat }}">{{ cat }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="modal-actions">
-      <button type="submit" class="btn btn-primary">Подтвердить</button>
-      <button type="button" class="btn btn-ghost" onclick="closeModal()">Отмена</button>
-    </div>
-  </form>
-</div>
-
 {% endblock %}
 
 {% block scripts %}
@@ -288,13 +256,34 @@ async function uploadStatement() {
   fd.append('file', file);
   const res = await fetch(`/period/${periodId}/upload-statement`, { method: 'POST', body: fd });
   const json = await res.json();
+  showImportReport(json);
+  status.textContent = '';
   if (json.ok) {
     showToast(`Загружено ${json.imported} операций`);
-    setTimeout(() => location.reload(), 1000);
+    // Stay on the page when there is something to read, otherwise refresh
+    if (!(json.errors?.length || json.warnings?.length)) setTimeout(() => location.reload(), 1000);
   } else {
-    status.textContent = json.error || 'Ошибка';
     showToast(json.error || 'Ошибка загрузки', 'error');
   }
+}
+
+function showImportReport(json) {
+  const fmt = n => Number(n || 0).toLocaleString('ru-RU');
+  const s = json.summary;
+  const list = (items, cls) => items?.length
+    ? `<div class="alert ${cls}"><ul>${items.map(i =>
+        `<li>${i.row ? 'Строка ' + i.row + ': ' : ''}${escapeHtml(i.error)}</li>`).join('')}</ul></div>` : '';
+  let html = '';
+  if (!json.ok) html += `<div class="alert alert-error">${escapeHtml(json.error || 'Ошибка')}</div>`;
+  if (s) html += `<div class="alert ${json.ok ? 'alert-success' : 'alert-warning'}">
+      Прочитано строк: ${s.rows_read} · корректных: ${s.valid} · с ошибками: ${s.invalid}
+      ${json.ok ? ' · импортировано: ' + json.imported : ''}<br>
+      Приход: +${fmt(s.total_in)} ₸ · Расход: −${fmt(s.total_out)} ₸ · Нетто: ${fmt(s.total_in - s.total_out)} ₸
+      ${json.ok ? '<br><a href="javascript:location.reload()">Обновить страницу</a>' : ''}</div>`;
+  html += list(json.errors?.filter(e => e.row), 'alert-error');
+  html += list(json.errors?.filter(e => !e.row && e.error !== json.error), 'alert-error');
+  html += list(json.warnings, 'alert-warning');
+  document.getElementById('import-report').innerHTML = html;
 }
 
 // Upload document
@@ -321,36 +310,6 @@ async function classifyAll() {
   const json = await res.json();
   showToast(`Классифицировано: ${json.classified}`);
   setTimeout(() => location.reload(), 1000);
-}
-
-// Open approve modal
-async function openApproveModal(txId, currentCategory) {
-  const res = await fetch(`/api/transaction/${txId}`);
-  const tx = await res.json();
-
-  document.getElementById('approve-tx-id').value = txId;
-  document.getElementById('approve-category').value = currentCategory || tx.llm_suggestion || 'income';
-  document.getElementById('tx-detail-info').innerHTML = `
-    <p><strong>${escapeHtml(tx.counterparty || '—')}</strong></p>
-    <p>${escapeHtml(tx.description || '')}</p>
-    <p class="tx-amount-big">${tx.direction === 'in' ? '+' : '−'} ${Number(tx.amount).toLocaleString('ru-RU')} ₸</p>
-    ${tx.llm_reasoning ? `<div class="reasoning markdown-content"><p><strong>AI:</strong></p>${renderMarkdown(tx.llm_reasoning)}</div>` : ''}
-  `;
-
-  openModal('approve-modal');
-}
-
-async function submitApproval(e) {
-  e.preventDefault();
-  const data = new FormData(e.target);
-  const txId = data.get('tx_id');
-  const res = await fetch(`/transaction/${txId}/approve`, { method: 'POST', body: data });
-  const json = await res.json();
-  if (json.ok) {
-    closeModal();
-    showToast('Операция подтверждена');
-    setTimeout(() => location.reload(), 600);
-  }
 }
 
 // Risk analysis
@@ -386,16 +345,6 @@ async function resolveRisk(riskId, action) {
     setTimeout(() => location.reload(), 600);
   }
 }
-
-// Update subcategory options when category changes
-document.getElementById('approve-category')?.addEventListener('change', function() {
-  const income = {{ income_categories | tojson }};
-  const expense = {{ expense_categories | tojson }};
-  const sel = document.getElementById('approve-subcategory');
-  const cats = this.value === 'income' ? income : this.value === 'expense' ? expense : [];
-  sel.innerHTML = '<option value="">— выберите —</option>' +
-    cats.map(c => `<option value="${c}">${c}</option>`).join('');
-});
 
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.risk-explain.markdown-content').forEach((node) => {

@@ -5,10 +5,11 @@ LLM SUGGESTS — human DECIDES. Never auto-approve.
 
 import json
 from config import (
-    LLM_MIN_CONFIDENCE,
-    LLM_TEMPERATURE, EXPENSE_CATEGORIES, INCOME_CATEGORIES
+    LLM_MIN_CONFIDENCE, LLM_PROVIDER,
+    LLM_TEMPERATURE, EXPENSE_CATEGORIES, INCOME_CATEGORIES, CATEGORY_SUBCATEGORIES,
 )
 from modules.llm import generate_text, LLMRateLimitError, LLMError, LLMConfigError
+from modules.llm.fake import fake_classify
 
 
 def classify_transaction(transaction: dict) -> dict:
@@ -16,11 +17,12 @@ def classify_transaction(transaction: dict) -> dict:
     Call LLM to classify a single transaction.
     Returns suggestion dict with confidence score.
     """
-    prompt = _build_prompt(transaction)
-
     try:
-        raw = generate_text(prompt, max_tokens=512, temperature=LLM_TEMPERATURE)
-        result = _parse_llm_response(raw)
+        if LLM_PROVIDER == "fake":
+            result = _validate_and_clean(fake_classify(transaction))
+        else:
+            raw = generate_text(_build_prompt(transaction), max_tokens=512, temperature=LLM_TEMPERATURE)
+            result = _parse_llm_response(raw)
     except LLMRateLimitError:
         result = _fallback_classification("Превышен лимит API (quota/rate limit). Попробуйте позже.")
     except (LLMConfigError, LLMError) as e:
@@ -108,18 +110,23 @@ def _parse_llm_response(raw: str) -> dict:
 
 def _validate_and_clean(data: dict) -> dict:
     """Validate LLM response fields."""
-    valid_categories = {"income", "expense", "personal"}
     category = data.get("category", "")
 
-    if category not in valid_categories:
+    if category not in CATEGORY_SUBCATEGORIES:
         return _fallback_classification(f"Invalid category: {category}")
 
     confidence = float(data.get("confidence", 0.5))
     confidence = max(0.0, min(1.0, confidence))
 
+    # Subcategory must come from the fixed list for this category, otherwise drop it
+    subcategory = str(data.get("subcategory") or "")
+    if subcategory not in CATEGORY_SUBCATEGORIES[category]:
+        subcategory = ""
+        confidence = min(confidence, LLM_MIN_CONFIDENCE - 0.01) if CATEGORY_SUBCATEGORIES[category] else confidence
+
     return {
         "category": category,
-        "subcategory": str(data.get("subcategory", ""))[:100],
+        "subcategory": subcategory,
         "confidence": confidence,
         "reasoning": str(data.get("reasoning", ""))[:500],
     }

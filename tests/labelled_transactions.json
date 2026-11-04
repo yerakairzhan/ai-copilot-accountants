@@ -1,0 +1,272 @@
+[
+ {
+  "direction": "in",
+  "counterparty": "ТОО Альфа Строй",
+  "description": "Оплата за консультационные услуги",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "income",
+  "expected_subcategory": "Оплата от клиентов"
+ },
+ {
+  "direction": "in",
+  "counterparty": "ТОО Бета Ритейл",
+  "description": "Оплата по договору №45",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "income",
+  "expected_subcategory": "Оплата от клиентов"
+ },
+ {
+  "direction": "in",
+  "counterparty": "ТОО Гамма",
+  "description": "Аванс по договору",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "income",
+  "expected_subcategory": "Аванс от клиентов"
+ },
+ {
+  "direction": "in",
+  "counterparty": "ИП Сергеев",
+  "description": "Предоплата за услуги",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "income",
+  "expected_subcategory": "Аванс от клиентов"
+ },
+ {
+  "direction": "in",
+  "counterparty": "ТОО Дельта Лоджистик",
+  "description": "Оплата за доставку",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "income",
+  "expected_subcategory": "Оплата от клиентов"
+ },
+ {
+  "direction": "in",
+  "counterparty": "ТОО Омега",
+  "description": "Счет №12 от 05.02",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "income",
+  "expected_subcategory": "Оплата от клиентов"
+ },
+ {
+  "direction": "in",
+  "counterparty": "",
+  "description": "Акт выполненных работ",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "income",
+  "expected_subcategory": "Оплата от клиентов"
+ },
+ {
+  "direction": "in",
+  "counterparty": "Иванов И.",
+  "description": "Поступление",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "income",
+  "expected_subcategory": "Прочие доходы"
+ },
+ {
+  "direction": "out",
+  "counterparty": "Аренда офиса ул. Абая 5",
+  "description": "Аренда за январь 2025",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Аренда офиса"
+ },
+ {
+  "direction": "out",
+  "counterparty": "БЦ Нурлы Тау",
+  "description": "Аренда помещения",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Аренда офиса"
+ },
+ {
+  "direction": "out",
+  "counterparty": "Сотрудник Ахметов",
+  "description": "Зарплата за март",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Зарплата сотрудников"
+ },
+ {
+  "direction": "out",
+  "counterparty": "Бухгалтер",
+  "description": "Оклад за февраль",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Зарплата сотрудников"
+ },
+ {
+  "direction": "out",
+  "counterparty": "КГД",
+  "description": "Налог ИПН и ОПВ",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Налоги и взносы"
+ },
+ {
+  "direction": "out",
+  "counterparty": "КГД",
+  "description": "Социальные взносы",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Налоги и взносы"
+ },
+ {
+  "direction": "out",
+  "counterparty": "Алсеко",
+  "description": "Электроэнергия, коммунальные услуги",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Коммунальные услуги"
+ },
+ {
+  "direction": "out",
+  "counterparty": "Мобильный оператор",
+  "description": "Услуги связи за январь",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Услуги связи"
+ },
+ {
+  "direction": "out",
+  "counterparty": "Beeline",
+  "description": "Интернет офис",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Услуги связи"
+ },
+ {
+  "direction": "out",
+  "counterparty": "Kaspi Bank",
+  "description": "Комиссия за обслуживание",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Банковские комиссии"
+ },
+ {
+  "direction": "out",
+  "counterparty": "ТОО Гамма Медиа",
+  "description": "Реклама в соцсетях",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Реклама и маркетинг"
+ },
+ {
+  "direction": "out",
+  "counterparty": "Таргет Pro",
+  "description": "Настройка таргета",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Реклама и маркетинг"
+ },
+ {
+  "direction": "out",
+  "counterparty": "Яндекс Такси",
+  "description": "Такси по городу",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Транспортные расходы"
+ },
+ {
+  "direction": "out",
+  "counterparty": "Helios АЗС",
+  "description": "Бензин АИ-95",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Транспортные расходы"
+ },
+ {
+  "direction": "out",
+  "counterparty": "ТОО Техно",
+  "description": "Ноутбук для офиса",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Оборудование и ПО"
+ },
+ {
+  "direction": "out",
+  "counterparty": "1С",
+  "description": "Лицензия 1С",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Оборудование и ПО"
+ },
+ {
+  "direction": "out",
+  "counterparty": "ТОО Поставщик",
+  "description": "Закупка товара",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Закупка товаров"
+ },
+ {
+  "direction": "out",
+  "counterparty": "ТОО Прочее",
+  "description": "Платёж",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "expense",
+  "expected_subcategory": "Прочие расходы"
+ },
+ {
+  "direction": "out",
+  "counterparty": "",
+  "description": "Снятие наличных",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "personal",
+  "expected_subcategory": ""
+ },
+ {
+  "direction": "out",
+  "counterparty": "Банкомат",
+  "description": "Снятие в ATM",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "personal",
+  "expected_subcategory": ""
+ },
+ {
+  "direction": "out",
+  "counterparty": "Перевод себе",
+  "description": "Личный перевод на карту",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "personal",
+  "expected_subcategory": ""
+ },
+ {
+  "direction": "out",
+  "counterparty": "",
+  "description": "Наличные",
+  "amount": 10000,
+  "date": "2025-01-15",
+  "expected_category": "personal",
+  "expected_subcategory": ""
+ }
+]

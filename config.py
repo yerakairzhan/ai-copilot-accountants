@@ -25,15 +25,9 @@ UPLOAD_DIR = os.getenv("UPLOAD_DIR", "data/uploads")
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key")
 
 
-def _default_provider() -> str:
-    if GEMINI_API_KEY:
-        return "gemini"
-    if ANTHROPIC_API_KEY:
-        return "anthropic"
-    return "gemini"
-
-
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", _default_provider()).strip().lower()
+# "fake" = built-in rule-based classifier, no API calls (default).
+# Set LLM_PROVIDER=gemini or anthropic (plus the key) to use a real model.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "fake").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-5-20251101").strip() or "claude-opus-4-5-20251101"
 
@@ -68,3 +62,11 @@ INCOME_CATEGORIES = [
     "Аванс от клиентов",
     "Прочие доходы",
 ]
+
+# Allowed top-level categories and, for each, the allowed subcategories.
+# This is the single source of truth for the classifier output schema.
+CATEGORY_SUBCATEGORIES = {
+    "income": INCOME_CATEGORIES,
+    "expense": EXPENSE_CATEGORIES,
+    "personal": [],
+}

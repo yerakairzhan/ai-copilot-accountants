@@ -160,3 +160,13 @@ UPLOAD_DIR=data/uploads          # Папка для файлов
 4. Python 3.11+
 
 Аудит-лог всех действий доступен по ссылке **«📋 Аудит»** в каждом периоде.
+
+## Fake AI & tests
+
+By default `LLM_PROVIDER=fake`: transactions are classified by built-in keyword rules (`modules/llm/fake.py`), no API key or network needed. Set `LLM_PROVIDER=gemini|anthropic` plus a key to use a real model.
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Labelled examples live in `tests/labelled_transactions.json`. Review screen: `/period/<id>/review`.
