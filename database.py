@@ -96,11 +96,13 @@ def init_db():
     """)
 
     # Lightweight migration for databases created before these columns existed
-    existing = {r["name"] for r in cur.execute("PRAGMA table_info(transactions)")}
+    existing = {r["name"]
+                for r in cur.execute("PRAGMA table_info(transactions)")}
     for col, ddl in (("llm_subcategory", "TEXT"), ("review_status", "TEXT DEFAULT 'pending'")):
         if col not in existing:
             cur.execute(f"ALTER TABLE transactions ADD COLUMN {col} {ddl}")
-    cur.execute("UPDATE transactions SET review_status = 'accepted' WHERE approved_by IS NOT NULL AND review_status = 'pending'")
+    cur.execute(
+        "UPDATE transactions SET review_status = 'accepted' WHERE approved_by IS NOT NULL AND review_status = 'pending'")
 
     conn.commit()
     conn.close()
@@ -110,7 +112,8 @@ def log_action(action: str, entity_type: str = None, entity_id: int = None, deta
     conn = get_connection()
     conn.execute(
         "INSERT INTO audit_log (action, entity_type, entity_id, details) VALUES (?, ?, ?, ?)",
-        (action, entity_type, entity_id, json.dumps(details or {}, ensure_ascii=False))
+        (action, entity_type, entity_id, json.dumps(
+            details or {}, ensure_ascii=False))
     )
     conn.commit()
     conn.close()
@@ -140,7 +143,8 @@ def get_transactions(period_id: int):
 def get_risks(period_id: int):
     conn = get_connection()
     rows = conn.execute(
-        "SELECT * FROM risks WHERE period_id = ? ORDER BY severity DESC",
+        """SELECT * FROM risks WHERE period_id = ?
+       ORDER BY CASE severity WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, id""",
         (period_id,)
     ).fetchall()
     conn.close()
@@ -191,7 +195,8 @@ def refresh_period_status(period_id: int) -> str:
         (period_id,),
     ).fetchone()
     status = "reviewed" if total and not pending else "draft"
-    conn.execute("UPDATE periods SET status = ? WHERE id = ?", (status, period_id))
+    conn.execute("UPDATE periods SET status = ? WHERE id = ?",
+                 (status, period_id))
     conn.commit()
     conn.close()
     return status

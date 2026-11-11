@@ -36,6 +36,7 @@ CYRILLIC_TO_LATIN = {
     "ү": "u", "Ү": "U", "һ": "h", "Һ": "H", "і": "i", "І": "I",
 }
 
+
 def _styles():
     styles = getSampleStyleSheet()
     custom = {
@@ -53,6 +54,10 @@ def _styles():
         "RiskLow": ParagraphStyle("RiskLow", fontSize=9, textColor=colors.HexColor("#2980b9")),
     }
     return {**{k: styles[k] for k in styles.byName}, **custom}
+
+
+def _regime_name(period: dict) -> str:
+    return {"USN": "USN", "SELF": "Self-employed"}.get(period.get("tax_regime"), "USN")
 
 
 def _fmt_money(amount: float) -> str:
@@ -103,8 +108,8 @@ def generate_tax_package(
     story.append(Spacer(1, 0.5 * cm))
     story.append(Paragraph("TAX PACKAGE", S["Title"]))
     story.append(Paragraph(
-        f"Client: {_latinize(client.get('name', ''))} | BIN/IIN: {client.get('bin', '')} | Regime: USN",
-        S["Subtitle"]
+        f"Client: {_latinize(client.get('name', ''))} | BIN/IIN: {client.get('bin', '')} | Regime: {_regime_name(period)}",        S[
+            "Subtitle"]
     ))
     story.append(Paragraph(
         f"Period: {period.get('quarter', '')} {period.get('year', '')}",
@@ -114,7 +119,8 @@ def generate_tax_package(
         f"Generated at: {datetime.now().strftime('%d.%m.%Y %H:%M')}",
         S["Small"]
     ))
-    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#ccc"), spaceAfter=12))
+    story.append(HRFlowable(width="100%", thickness=1,
+                 color=colors.HexColor("#ccc"), spaceAfter=12))
 
     # ── Summary ──
     story.append(Paragraph("1. Tax Summary", S["Heading"]))
@@ -125,7 +131,8 @@ def generate_tax_package(
     summary_data = [
         ["Metric", "Amount"],
         ["Income (tax base)", _fmt_money(summary["income"])],
-        [f"USN tax ({int(summary['tax_rate'] * 100)}%)", _fmt_money(summary["tax"])],
+        [f"{_regime_name(period)} tax ({int(summary['tax_rate'] * 100)}%)",
+         _fmt_money(summary["tax"])],
         ["Expenses (for analysis)", _fmt_money(summary["expenses"])],
         ["Personal transactions (excluded)", _fmt_money(summary["personal"])],
         ["Unclassified", _fmt_money(summary["unclassified"])],
@@ -141,7 +148,8 @@ def generate_tax_package(
         ("FONTNAME", (0, 2), (-1, 2), "Helvetica-Bold"),
         ("ALIGN", (1, 0), (1, -1), "RIGHT"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#ddd")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f9f9f9")]),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+         [colors.white, colors.HexColor("#f9f9f9")]),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
     ]))
@@ -169,7 +177,8 @@ def generate_tax_package(
         ))
         story.append(Spacer(1, 4))
 
-    tx_header = [["Date", "Counterparty / Description", "Amount", "Category", "Status"]]
+    tx_header = [["Date", "Counterparty / Description",
+                  "Amount", "Category", "Status"]]
     tx_rows = []
 
     for tx in transactions:
@@ -180,7 +189,8 @@ def generate_tax_package(
             None: "—",
         }
         status = "Approved" if tx.get("approved_by") else "Pending"
-        desc = _latinize((tx.get("counterparty") or tx.get("description") or ""))[:40]
+        desc = _latinize(
+            (tx.get("counterparty") or tx.get("description") or ""))[:40]
         amount_str = _fmt_money(tx.get("amount", 0))
         if tx.get("direction") == "in":
             amount_str = "+ " + amount_str
@@ -196,7 +206,8 @@ def generate_tax_package(
         ])
 
     all_rows = tx_header + tx_rows
-    tx_table = Table(all_rows, colWidths=[2.2 * cm, 6 * cm, 3.5 * cm, 2.5 * cm, 2.8 * cm])
+    tx_table = Table(all_rows, colWidths=[
+                     2.2 * cm, 6 * cm, 3.5 * cm, 2.5 * cm, 2.8 * cm])
     tx_style = [
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a1a2e")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -204,7 +215,8 @@ def generate_tax_package(
         ("FONTSIZE", (0, 0), (-1, -1), 8),
         ("ALIGN", (2, 0), (2, -1), "RIGHT"),
         ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#ddd")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f9f9f9")]),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+         [colors.white, colors.HexColor("#f9f9f9")]),
         ("TOPPADDING", (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ("WORDWRAP", (1, 1), (1, -1), True),
@@ -213,7 +225,8 @@ def generate_tax_package(
     # Color unapproved rows
     for i, tx in enumerate(transactions, start=1):
         if not tx.get("approved_by"):
-            tx_style.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#fff3cd")))
+            tx_style.append(("BACKGROUND", (0, i), (-1, i),
+                            colors.HexColor("#fff3cd")))
 
     tx_table.setStyle(TableStyle(tx_style))
     story.append(tx_table)
@@ -226,7 +239,8 @@ def generate_tax_package(
         story.append(Paragraph("No risks detected.", S["Body"]))
     else:
         sev_labels = {"high": "HIGH", "medium": "MEDIUM", "low": "LOW"}
-        status_labels = {"open": "Open", "resolved": "Resolved", "ignored": "Ignored"}
+        status_labels = {"open": "Open",
+                         "resolved": "Resolved", "ignored": "Ignored"}
 
         risk_data = [["#", "Severity", "Description", "Status"]]
         for i, r in enumerate(risks, 1):
@@ -234,17 +248,20 @@ def generate_tax_package(
                 str(i),
                 sev_labels.get(r["severity"], r["severity"]),
                 _latinize(r.get("description", "")),
-                status_labels.get(r.get("status", "open"), r.get("status", "open")),
+                status_labels.get(r.get("status", "open"),
+                                  r.get("status", "open")),
             ])
 
-        risk_table = Table(risk_data, colWidths=[0.7 * cm, 2.5 * cm, 10 * cm, 2.8 * cm])
+        risk_table = Table(risk_data, colWidths=[
+                           0.7 * cm, 2.5 * cm, 10 * cm, 2.8 * cm])
         risk_style = [
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a1a2e")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("FONTSIZE", (0, 0), (-1, -1), 8),
             ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#ddd")),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f9f9f9")]),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+             [colors.white, colors.HexColor("#f9f9f9")]),
             ("TOPPADDING", (0, 0), (-1, -1), 4),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ]
@@ -254,7 +271,7 @@ def generate_tax_package(
             risk_style.append(("FONTNAME", (1, i), (1, i), "Helvetica-Bold"))
             if r.get("status") == "open":
                 risk_style.append(("BACKGROUND", (0, i), (-1, i),
-                                    colors.HexColor("#ffeeee") if r["severity"] == "high" else colors.white))
+                                   colors.HexColor("#ffeeee") if r["severity"] == "high" else colors.white))
 
         risk_table.setStyle(TableStyle(risk_style))
         story.append(risk_table)
@@ -262,7 +279,8 @@ def generate_tax_package(
     story.append(Spacer(1, 0.5 * cm))
 
     # ── Footer ──
-    story.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#ccc")))
+    story.append(HRFlowable(width="100%", thickness=0.5,
+                 color=colors.HexColor("#ccc")))
     story.append(Spacer(1, 4))
     story.append(Paragraph(
         "Document generated by AI Copilot for Accountants. "

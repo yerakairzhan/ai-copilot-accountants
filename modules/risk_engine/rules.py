@@ -5,6 +5,7 @@ Deterministic logic: no LLM in decision making.
 """
 
 from modules.llm import generate_text, LLMRateLimitError, LLMError, LLMConfigError
+from config import SELF_EMPLOYED_MONTHLY_LIMIT_MCI, MCI_BY_YEAR
 
 
 # ─── Rule Engine ─────────────────────────────────────────────────────────────
@@ -76,7 +77,7 @@ RISK_RULES = [
 ]
 
 
-def analyze_risks(transactions: list[dict], documents: dict = None) -> list[dict]:
+def analyze_risks(transactions: list[dict], documents: dict = None, regime: str = "USN") -> list[dict]:
     """
     Run all rules against transactions.
     documents: {transaction_id: [doc, ...]}
@@ -107,6 +108,55 @@ def analyze_risks(transactions: list[dict], documents: dict = None) -> list[dict
                     "description": rule["description"],
                     "llm_explanation": None,  # filled later on demand
                 })
+
+    if regime == "SELF":
+        risks.extend(_self_employed_risks(transactions))
+
+    return risks
+
+
+# ─── Self-employed regime rules ──────────────────────────────────────────────
+
+SALARY_KEYWORDS = ["зарплат", "оклад", "заработн", "salary"]
+
+
+def _self_employed_risks(transactions: list[dict]) -> list[dict]:
+    """Rules that apply only to clients on the self-employed regime."""
+    risks = []
+
+    # 1) Monthly income above 300 MCI: flag the transaction that crosses the limit
+    totals = {}
+    flagged_months = set()
+    for tx in sorted(transactions, key=lambda t: (t.get("date") or "", t["id"])):
+        if tx.get("direction") != "in" or not tx.get("date"):
+            continue
+        month = tx["date"][:7]                      # "2025-01"
+        totals[month] = totals.get(month, 0) + tx.get("amount", 0)
+        year = int(month[:4])
+        mci = MCI_BY_YEAR.get(year, max(MCI_BY_YEAR.values()))
+        limit = SELF_EMPLOYED_MONTHLY_LIMIT_MCI * mci
+        if totals[month] > limit and month not in flagged_months:
+            flagged_months.add(month)
+            risks.append({
+                "transaction_id": tx["id"],
+                "risk_type": "monthly_limit_exceeded",
+                "severity": "high",
+                "description": (f"Monthly income for {month} is {totals[month]:,.0f} KZT, "
+                                f"above the self-employed limit of {limit:,.0f} KZT ({SELF_EMPLOYED_MONTHLY_LIMIT_MCI} MCI)"),
+                "llm_explanation": None,
+            })
+
+    # 2) Outgoing payments that look like salaries (self-employed may not hire employees)
+    for tx in transactions:
+        text = f"{tx.get('counterparty') or ''} {tx.get('description') or ''}".lower()
+        if tx.get("direction") == "out" and any(k in text for k in SALARY_KEYWORDS):
+            risks.append({
+                "transaction_id": tx["id"],
+                "risk_type": "salary_payment",
+                "severity": "medium",
+                "description": "Payment looks like a salary; a self-employed client may not have employees",
+                "llm_explanation": None,
+            })
 
     return risks
 

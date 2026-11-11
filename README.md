@@ -38,6 +38,21 @@ python -m uvicorn app:app --reload --port 8000
 
 Открыть в браузере: **http://localhost:8000**
 
+### Запуск тестов
+
+Тесты нужно запускать из виртуального окружения проекта:
+
+```bash
+source venv/bin/activate
+python -m unittest discover -s tests -v
+```
+
+Или без активации окружения:
+
+```bash
+./venv/bin/python -m unittest discover -s tests -v
+```
+
 ---
 
 ## Как пользоваться

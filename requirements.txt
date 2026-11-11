@@ -1,4 +1,6 @@
-fastapi==0.115.0
+fastapi==0.116.2
+starlette==0.48.0
+anyio==4.10.0
 uvicorn==0.30.0
 python-multipart==0.0.9
 jinja2==3.1.4

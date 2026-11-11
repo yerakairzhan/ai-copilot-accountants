@@ -8,7 +8,8 @@ def _clean_api_key(value: str) -> str:
     key = (value or "").strip()
     lowered = key.lower()
     placeholder_markers = {"sk-ant-...", "your_key_here", "changeme"}
-    placeholder_parts = ("...", "your-key", "your_key", "change-this", "example")
+    placeholder_parts = ("...", "your-key", "your_key",
+                         "change-this", "example")
     if (
         not key
         or lowered in placeholder_markers
@@ -28,17 +29,29 @@ SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key")
 # "fake" = built-in rule-based classifier, no API calls (default).
 # Set LLM_PROVIDER=gemini or anthropic (plus the key) to use a real model.
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "fake").strip().lower()
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-4-5-20251101").strip() or "claude-opus-4-5-20251101"
+GEMINI_MODEL = os.getenv(
+    "GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+ANTHROPIC_MODEL = os.getenv(
+    "ANTHROPIC_MODEL", "claude-opus-4-5-20251101").strip() or "claude-opus-4-5-20251101"
 
 # Tax settings
 TAX_RATES = {
-    "USN": 0.03,   # 3% with expenses not deductible
-    "OUR": 0.10,   # Placeholder for future
+    "USN": 0.03,    # 3% with expenses not deductible
+    "SELF": 0.04,   # Self-employed special regime: 4% social payments, income tax 0%
+    "OUR": 0.10,    # Placeholder for future
 }
 
+# Display names for the regimes that can be chosen when creating a client
+REGIME_LABELS = {"USN": "УСН", "SELF": "Самозанятый"}
+
+# Self-employed regime limits (Tax Code RK 2026): income up to 300 MCI per month
+SELF_EMPLOYED_MONTHLY_LIMIT_MCI = 300
+# monthly calculation index (МРП), tenge
+MCI_BY_YEAR = {2025: 3932, 2026: 4325}
+
 # LLM settings
-LLM_MODEL = os.getenv("LLM_MODEL", GEMINI_MODEL if LLM_PROVIDER == "gemini" else ANTHROPIC_MODEL).strip()
+LLM_MODEL = os.getenv("LLM_MODEL", GEMINI_MODEL if LLM_PROVIDER ==
+                      "gemini" else ANTHROPIC_MODEL).strip()
 LLM_MIN_CONFIDENCE = 0.70
 LLM_TEMPERATURE = 0.1
 

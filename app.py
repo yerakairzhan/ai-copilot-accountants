@@ -19,7 +19,7 @@ import database as db
 
 import hmac
 import hashlib
-from config import UPLOAD_DIR, TAX_RATES, EXPENSE_CATEGORIES, INCOME_CATEGORIES, CATEGORY_SUBCATEGORIES
+from config import UPLOAD_DIR, TAX_RATES, REGIME_LABELS, EXPENSE_CATEGORIES, INCOME_CATEGORIES, CATEGORY_SUBCATEGORIES
 from modules.ingestion.kaspi_parser import parse_kaspi_excel, parse_kaspi_pdf
 from modules.classifier.transaction_classifier import classify_transaction
 from modules.risk_engine.rules import analyze_risks, explain_risk
@@ -30,6 +30,9 @@ from modules.export.pdf_generator import generate_tax_package
 app = FastAPI(title="AI Copilot for Accountants")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+templates.env.globals["regime_label"] = lambda code: REGIME_LABELS.get(
+    code, code)
+
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs("data", exist_ok=True)
@@ -59,7 +62,8 @@ def _save_upload(file: UploadFile, subdir: str = "") -> str:
 
 
 def _make_auth_token(email: str) -> str:
-    signature = hmac.new(AUTH_SECRET.encode(), email.encode(), hashlib.sha256).hexdigest()
+    signature = hmac.new(AUTH_SECRET.encode(),
+                         email.encode(), hashlib.sha256).hexdigest()
     return f"{email}:{signature}"
 
 
@@ -69,7 +73,8 @@ def _verify_auth_token(token: str) -> bool:
     except ValueError:
         return False
 
-    expected = hmac.new(AUTH_SECRET.encode(), email.encode(), hashlib.sha256).hexdigest()
+    expected = hmac.new(AUTH_SECRET.encode(), email.encode(),
+                        hashlib.sha256).hexdigest()
     return hmac.compare_digest(signature, expected) and email == AUTH_EMAIL
 
 
@@ -83,7 +88,23 @@ def _is_authenticated(request: Request) -> bool:
 def render_template(request: Request, template_name: str, **context):
     context.setdefault("logged_in", _is_authenticated(request))
     context["request"] = request
-    return templates.TemplateResponse(template_name, context)
+    return templates.TemplateResponse(request, template_name, context)
+
+# ─── Global login check ───────────────────────────────────────────────────────
+
+
+PUBLIC_PATHS = {"/login", "/logout"}
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    if path in PUBLIC_PATHS or path.startswith("/static/") or _is_authenticated(request):
+        return await call_next(request)
+    # Browser page navigation -> send to the login page; everything else -> 401
+    if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
+        return RedirectResponse("/login", status_code=303)
+    return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
 
 
 # ─── Authentication ──────────────────────────────────────────────────────────
@@ -99,7 +120,8 @@ async def login_page(request: Request):
 async def login_submit(request: Request, email: str = Form(...), password: str = Form(...)):
     if email == AUTH_EMAIL and password == AUTH_PASSWORD:
         response = RedirectResponse("/", status_code=303)
-        response.set_cookie(AUTH_COOKIE_NAME, _make_auth_token(email), httponly=True, max_age=3600)
+        response.set_cookie(AUTH_COOKIE_NAME, _make_auth_token(
+            email), httponly=True, max_age=3600)
         return response
 
     return render_template(request, "login.html", error="Неверный логин или пароль")
@@ -120,7 +142,8 @@ async def dashboard(request: Request):
         return RedirectResponse("/login", status_code=303)
 
     conn = get_conn()
-    clients = conn.execute("SELECT * FROM clients ORDER BY created_at DESC").fetchall()
+    clients = conn.execute(
+        "SELECT * FROM clients ORDER BY created_at DESC").fetchall()
     periods = conn.execute("""
         SELECT p.*, c.name as client_name
         FROM periods p JOIN clients c ON p.client_id = c.id
@@ -143,6 +166,8 @@ async def create_client(
     bin_number: str = Form(""),
     tax_regime: str = Form("USN"),
 ):
+    if tax_regime not in REGIME_LABELS:
+        raise HTTPException(400, "Unknown tax regime")
     conn = get_conn()
     cur = conn.execute(
         "INSERT INTO clients (name, bin, tax_regime) VALUES (?, ?, ?)",
@@ -171,7 +196,8 @@ async def create_period(
     period_id = cur.lastrowid
     conn.commit()
     conn.close()
-    db.log_action("created_period", "period", period_id, {"quarter": quarter, "year": year})
+    db.log_action("created_period", "period", period_id,
+                  {"quarter": quarter, "year": year})
     return JSONResponse({"ok": True, "period_id": period_id})
 
 
@@ -188,7 +214,8 @@ async def period_view(request: Request, period_id: int):
 
     transactions = db.get_transactions(period_id)
     risks = db.get_risks(period_id)
-    summary = db.calculate_tax_summary(period_id, TAX_RATES.get(period.get("tax_regime", "USN"), 0.03))
+    summary = db.calculate_tax_summary(
+        period_id, TAX_RATES.get(period.get("tax_regime", "USN"), 0.03))
 
     open_risks = [r for r in risks if r.get("status") == "open"]
     pending_tx = [t for t in transactions if not t.get("approved_by")]
@@ -242,14 +269,17 @@ async def upload_statement(period_id: int, file: UploadFile = File(...)):
     # Skip rows already imported for this period (re-uploading the same file)
     conn = get_conn()
     existing = {
-        (r["date"], r["amount"], r["direction"], r["counterparty"] or "", r["description"] or "")
+        (r["date"], r["amount"], r["direction"],
+         r["counterparty"] or "", r["description"] or "")
         for r in conn.execute("SELECT * FROM transactions WHERE period_id = ?", (period_id,))
     }
     inserted = 0
     for tx in transactions:
-        key = (tx["date"], tx["amount"], tx["direction"], tx["counterparty"], tx["description"])
+        key = (tx["date"], tx["amount"], tx["direction"],
+               tx["counterparty"], tx["description"])
         if key in existing:
-            warnings.append({"row": 0, "error": f"Уже импортировано ранее: {tx['date']} {tx['amount']:,.2f}"})
+            warnings.append(
+                {"row": 0, "error": f"Уже импортировано ранее: {tx['date']} {tx['amount']:,.2f}"})
             continue
         conn.execute("""
             INSERT INTO transactions
@@ -296,7 +326,8 @@ async def upload_document(
     )
     conn.commit()
     conn.close()
-    db.log_action("uploaded_document", "period", period_id, {"file": file.filename})
+    db.log_action("uploaded_document", "period",
+                  period_id, {"file": file.filename})
     return JSONResponse({"ok": True})
 
 
@@ -337,7 +368,8 @@ async def classify_all(period_id: int):
     conn.commit()
     conn.close()
 
-    db.log_action("classify_all", "period", period_id, {"classified": classified_count})
+    db.log_action("classify_all", "period", period_id,
+                  {"classified": classified_count})
     return JSONResponse({"ok": True, "classified": classified_count})
 
 
@@ -355,13 +387,15 @@ async def approve_transaction(
         raise HTTPException(400, "Invalid subcategory for this category")
 
     conn = get_conn()
-    tx = conn.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,)).fetchone()
+    tx = conn.execute(
+        "SELECT * FROM transactions WHERE id = ?", (tx_id,)).fetchone()
     if not tx:
         conn.close()
         raise HTTPException(404, "Transaction not found")
 
     # "accepted" = accountant kept the AI suggestion as is, "edited" = changed it
-    accepted = tx["llm_suggestion"] == category and (tx["llm_subcategory"] or "") == subcategory
+    accepted = tx["llm_suggestion"] == category and (
+        tx["llm_subcategory"] or "") == subcategory
     review_status = "accepted" if accepted else "edited"
 
     conn.execute("""
@@ -426,7 +460,8 @@ async def accept_confident(period_id: int):
     conn.commit()
     conn.close()
     db.refresh_period_status(period_id)
-    db.log_action("accept_confident", "period", period_id, {"accepted": len(rows)})
+    db.log_action("accept_confident", "period",
+                  period_id, {"accepted": len(rows)})
     return JSONResponse({"ok": True, "accepted": len(rows)})
 
 
@@ -434,6 +469,9 @@ async def accept_confident(period_id: int):
 
 @app.post("/period/{period_id}/analyze-risks")
 async def run_risk_analysis(period_id: int):
+    period = db.get_period_with_client(period_id)
+    if not period:
+        raise HTTPException(404, "Period not found")
     transactions = db.get_transactions(period_id)
 
     conn = get_conn()
@@ -448,8 +486,8 @@ async def run_risk_analysis(period_id: int):
         if tid:
             docs_by_tx.setdefault(tid, []).append(dict(d))
 
-    risks = analyze_risks(transactions, docs_by_tx)
-
+    risks = analyze_risks(transactions, docs_by_tx,
+                          period.get("tax_regime", "USN"))
     conn = get_conn()
     conn.execute("DELETE FROM risks WHERE period_id = ?", (period_id,))
     for r in risks:
@@ -460,7 +498,8 @@ async def run_risk_analysis(period_id: int):
     conn.commit()
     conn.close()
 
-    db.log_action("analyzed_risks", "period", period_id, {"risks_found": len(risks)})
+    db.log_action("analyzed_risks", "period", period_id,
+                  {"risks_found": len(risks)})
     return JSONResponse({"ok": True, "risks_found": len(risks)})
 
 
@@ -469,7 +508,8 @@ async def run_risk_analysis(period_id: int):
 @app.get("/risk/{risk_id}/explain")
 async def get_risk_explanation(risk_id: int):
     conn = get_conn()
-    risk_row = conn.execute("SELECT * FROM risks WHERE id = ?", (risk_id,)).fetchone()
+    risk_row = conn.execute(
+        "SELECT * FROM risks WHERE id = ?", (risk_id,)).fetchone()
     if not risk_row:
         conn.close()
         raise HTTPException(404)
@@ -529,7 +569,8 @@ async def export_pdf(period_id: int):
 
     transactions = db.get_transactions(period_id)
     risks = db.get_risks(period_id)
-    summary = db.calculate_tax_summary(period_id, TAX_RATES.get(period.get("tax_regime", "USN"), 0.03))
+    summary = db.calculate_tax_summary(
+        period_id, TAX_RATES.get(period.get("tax_regime", "USN"), 0.03))
 
     client = {
         "name": period.get("client_name", ""),
@@ -540,7 +581,8 @@ async def export_pdf(period_id: int):
     output_path = f"data/exports/{filename}"
 
     try:
-        generate_tax_package(output_path, client, period, transactions, risks, summary)
+        generate_tax_package(output_path, client, period,
+                             transactions, risks, summary)
     except Exception as e:
         raise HTTPException(500, f"Ошибка генерации PDF: {str(e)}")
 
@@ -579,7 +621,8 @@ async def audit_log(request: Request, period_id: int):
 @app.get("/api/transaction/{tx_id}")
 async def get_transaction(tx_id: int):
     conn = get_conn()
-    row = conn.execute("SELECT * FROM transactions WHERE id = ?", (tx_id,)).fetchone()
+    row = conn.execute(
+        "SELECT * FROM transactions WHERE id = ?", (tx_id,)).fetchone()
     conn.close()
     if not row:
         raise HTTPException(404)

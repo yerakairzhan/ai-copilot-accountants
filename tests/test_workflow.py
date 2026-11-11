@@ -2,6 +2,12 @@
 Run: python -m unittest discover -s tests -v
 Uses the fake AI and a temporary database — no API key or network needed.
 """
+import app as app_module
+from modules.ingestion.kaspi_parser import parse_kaspi_excel
+from modules.classifier.transaction_classifier import classify_transaction, _validate_and_clean
+from config import CATEGORY_SUBCATEGORIES
+from fastapi.testclient import TestClient
+import openpyxl
 import json
 import os
 import sys
@@ -18,17 +24,12 @@ os.environ["DATABASE_PATH"] = os.path.join(_tmp, "test.sqlite")
 os.environ["UPLOAD_DIR"] = os.path.join(_tmp, "uploads")
 os.environ["LLM_PROVIDER"] = "fake"
 
-import openpyxl
-from fastapi.testclient import TestClient
 
-from config import CATEGORY_SUBCATEGORIES
-from modules.classifier.transaction_classifier import classify_transaction, _validate_and_clean
-from modules.ingestion.kaspi_parser import parse_kaspi_excel
-import app as app_module
-
-LABELLED = json.loads((ROOT / "tests" / "labelled_transactions.json").read_text(encoding="utf-8"))
+LABELLED = json.loads(
+    (ROOT / "tests" / "labelled_transactions.json").read_text(encoding="utf-8"))
 SAMPLE = str(ROOT / "data" / "sample_kaspi_statement.xlsx")
-HEADER = ("Дата", "Контрагент", "Описание операции", "Кредит (приход)", "Дебет (расход)", "Остаток")
+HEADER = ("Дата", "Контрагент", "Описание операции",
+          "Кредит (приход)", "Дебет (расход)", "Остаток")
 
 
 def make_xlsx(rows, header=HEADER) -> str:
@@ -62,7 +63,8 @@ class ParserTests(unittest.TestCase):
         ])
         r = parse_kaspi_excel(path)
         self.assertEqual(r["summary"]["valid"], 1)
-        self.assertEqual(sorted(e["row"] for e in r["errors"]), [3, 4, 5, 6, 7])
+        self.assertEqual(sorted(e["row"]
+                         for e in r["errors"]), [3, 4, 5, 6, 7])
 
     def test_balance_mismatch_and_duplicate(self):
         path = make_xlsx([
@@ -88,7 +90,8 @@ class ClassifierTests(unittest.TestCase):
             self.assertIn(r["category"], CATEGORY_SUBCATEGORIES)
             self.assertTrue(0.0 <= r["confidence"] <= 1.0)
             if r["subcategory"]:
-                self.assertIn(r["subcategory"], CATEGORY_SUBCATEGORIES[r["category"]])
+                self.assertIn(r["subcategory"],
+                              CATEGORY_SUBCATEGORIES[r["category"]])
 
     def test_accuracy_on_labelled_data(self):
         ok_cat = ok_sub = 0
@@ -97,18 +100,23 @@ class ClassifierTests(unittest.TestCase):
             ok_cat += r["category"] == tx["expected_category"]
             ok_sub += r["category"] == tx["expected_category"] and r["subcategory"] == tx["expected_subcategory"]
         n = len(LABELLED)
-        print(f"\ncategory accuracy {ok_cat}/{n}, subcategory accuracy {ok_sub}/{n}")
+        print(
+            f"\ncategory accuracy {ok_cat}/{n}, subcategory accuracy {ok_sub}/{n}")
         self.assertGreaterEqual(ok_cat / n, 0.95)
         self.assertGreaterEqual(ok_sub / n, 0.90)
 
     def test_unclear_goes_to_review(self):
-        r = classify_transaction({"direction": "out", "counterparty": "", "description": "xyz"})
+        r = classify_transaction(
+            {"direction": "out", "counterparty": "", "description": "xyz"})
         self.assertTrue(r["needs_review"])
 
     def test_validator_rejects_bad_output(self):
-        self.assertIsNone(_validate_and_clean({"category": "banana"})["category"])
-        r = _validate_and_clean({"category": "income", "subcategory": "Аренда офиса", "confidence": 5})
-        self.assertEqual(r["subcategory"], "")  # expense subcategory not allowed for income
+        self.assertIsNone(_validate_and_clean(
+            {"category": "banana"})["category"])
+        r = _validate_and_clean(
+            {"category": "income", "subcategory": "Аренда офиса", "confidence": 5})
+        # expense subcategory not allowed for income
+        self.assertEqual(r["subcategory"], "")
         self.assertLessEqual(r["confidence"], 1.0)
 
 
@@ -118,52 +126,120 @@ class WorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.c = TestClient(app_module.app)
-        cid = cls.c.post("/clients/create", data={"name": "Test IP"}).json()["client_id"]
-        cls.pid = cls.c.post("/periods/create", data={"client_id": cid, "quarter": "Q1", "year": 2025}).json()["period_id"]
+        cls.c.cookies.set(app_module.AUTH_COOKIE_NAME,
+                          app_module._make_auth_token(app_module.AUTH_EMAIL))
+        cid = cls.c.post("/clients/create",
+                         data={"name": "Test IP"}).json()["client_id"]
+        cls.pid = cls.c.post(
+            "/periods/create", data={"client_id": cid, "quarter": "Q1", "year": 2025}).json()["period_id"]
 
     def test_full_flow(self):
         c, pid = self.c, self.pid
         with open(SAMPLE, "rb") as f:
-            up = c.post(f"/period/{pid}/upload-statement", files={"file": ("s.xlsx", f)}).json()
+            up = c.post(f"/period/{pid}/upload-statement",
+                        files={"file": ("s.xlsx", f)}).json()
         self.assertTrue(up["ok"])
         self.assertEqual(up["imported"], 8)
 
         with open(SAMPLE, "rb") as f:  # re-upload: nothing new
-            again = c.post(f"/period/{pid}/upload-statement", files={"file": ("s.xlsx", f)}).json()
+            again = c.post(f"/period/{pid}/upload-statement",
+                           files={"file": ("s.xlsx", f)}).json()
         self.assertEqual(again["imported"], 0)
 
-        self.assertEqual(c.post(f"/period/{pid}/classify-all").json()["classified"], 8)
+        self.assertEqual(
+            c.post(f"/period/{pid}/classify-all").json()["classified"], 8)
         txs = {t["id"]: t for t in app_module.db.get_transactions(pid)}
         self.assertTrue(all(t["llm_suggestion"] for t in txs.values()))
 
         # bad category / subcategory rejected
         tid = next(iter(txs))
-        self.assertEqual(c.post(f"/transaction/{tid}/approve", data={"category": "x"}).status_code, 400)
-        self.assertEqual(c.post(f"/transaction/{tid}/approve", data={"category": "income", "subcategory": "Аренда офиса"}).status_code, 400)
+        self.assertEqual(
+            c.post(f"/transaction/{tid}/approve", data={"category": "x"}).status_code, 400)
+        self.assertEqual(c.post(f"/transaction/{tid}/approve", data={
+                         "category": "income", "subcategory": "Аренда офиса"}).status_code, 400)
 
         # accept AI as is -> accepted; change category -> edited
         t = txs[tid]
-        r = c.post(f"/transaction/{tid}/approve", data={"category": t["llm_suggestion"], "subcategory": t["llm_subcategory"] or ""}).json()
+        r = c.post(f"/transaction/{tid}/approve", data={
+                   "category": t["llm_suggestion"], "subcategory": t["llm_subcategory"] or ""}).json()
         self.assertEqual(r["review_status"], "accepted")
         other = [i for i in txs if i != tid][0]
-        r = c.post(f"/transaction/{other}/approve", data={"category": "personal"}).json()
-        self.assertEqual(r["review_status"], "edited" if txs[other]["llm_suggestion"] != "personal" else "accepted")
+        r = c.post(f"/transaction/{other}/approve",
+                   data={"category": "personal"}).json()
+        self.assertEqual(r["review_status"], "edited" if txs[other]
+                         ["llm_suggestion"] != "personal" else "accepted")
         self.assertEqual(r["period_status"], "draft")
 
         # bulk accept confident, then finish the rest by hand
         c.post(f"/period/{pid}/accept-confident")
         for t in app_module.db.get_transactions(pid):
             if not t["approved_by"]:
-                c.post(f"/transaction/{t['id']}/approve", data={"category": t["llm_suggestion"], "subcategory": t["llm_subcategory"] or ""})
+                c.post(f"/transaction/{t['id']}/approve", data={
+                       "category": t["llm_suggestion"], "subcategory": t["llm_subcategory"] or ""})
 
         final = app_module.db.get_transactions(pid)
-        self.assertTrue(all(t["approved_by"] and t["review_status"] in ("accepted", "edited") for t in final))
-        self.assertEqual(app_module.db.get_period_with_client(pid)["status"], "reviewed")
+        self.assertTrue(all(t["approved_by"] and t["review_status"] in (
+            "accepted", "edited") for t in final))
+        self.assertEqual(app_module.db.get_period_with_client(pid)[
+                         "status"], "reviewed")
 
         # review page renders
-        page = c.get(f"/period/{pid}/review", cookies={app_module.AUTH_COOKIE_NAME: app_module._make_auth_token(app_module.AUTH_EMAIL)})
+        c.cookies.set(app_module.AUTH_COOKIE_NAME,
+                      app_module._make_auth_token(app_module.AUTH_EMAIL))
+        page = c.get(f"/period/{pid}/review")
         self.assertEqual(page.status_code, 200)
         self.assertIn("Проверка операций", page.text)
+
+class AuthTests(unittest.TestCase):
+    """ISS-01: every route except login/static must require authentication."""
+
+    def test_endpoints_require_login(self):
+        anon = TestClient(app_module.app)
+        for method, url in (
+            ("post", "/clients/create"),
+            ("post", "/periods/create"),
+            ("post", "/period/1/upload-statement"),
+            ("post", "/period/1/classify-all"),
+            ("post", "/transaction/1/approve"),
+            ("post", "/period/1/analyze-risks"),
+            ("get", "/api/transaction/1"),
+            ("get", "/period/1/export-pdf"),
+            ("get", "/period/1/review"),
+        ):
+            r = getattr(anon, method)(url, follow_redirects=False)
+            self.assertEqual(r.status_code, 401, f"{method.upper()} {url}")
+
+    def test_browser_page_redirects_to_login(self):
+        anon = TestClient(app_module.app)
+        r = anon.get(
+            "/", headers={"accept": "text/html"}, follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
+        self.assertEqual(r.headers["location"], "/login")
+
+    def test_login_page_is_public(self):
+        self.assertEqual(TestClient(app_module.app).get(
+            "/login").status_code, 200)
+
+
+class RiskOrderTests(unittest.TestCase):
+    """ISS-06: risks are listed high -> medium -> low."""
+
+    def test_severity_order(self):
+        c = TestClient(app_module.app)
+        c.cookies.set(app_module.AUTH_COOKIE_NAME,
+                      app_module._make_auth_token(app_module.AUTH_EMAIL))
+        cid = c.post("/clients/create",
+                     data={"name": "Risk IP"}).json()["client_id"]
+        pid = c.post("/periods/create", data={"client_id": cid,
+                     "quarter": "Q2", "year": 2025}).json()["period_id"]
+        conn = app_module.db.get_connection()
+        for sev in ("low", "high", "medium", "low", "high"):
+            conn.execute(
+                "INSERT INTO risks (period_id, risk_type, severity, description) VALUES (?, 'x', ?, 'd')", (pid, sev))
+        conn.commit()
+        conn.close()
+        order = [r["severity"] for r in app_module.db.get_risks(pid)]
+        self.assertEqual(order, ["high", "high", "medium", "low", "low"])
 
 
 if __name__ == "__main__":
